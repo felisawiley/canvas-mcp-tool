@@ -8,10 +8,13 @@ The week runs Monday 00:00 through Sunday in the server's local timezone. On Ren
 
 | Tool | What it returns |
 |---|---|
+| `user_status()` | Guest, or the signed-in email. Always answers. |
 | `canvas()` | Active courses, instructors, up to ten modules each, and the two latest announcements. |
 | `assignments(course?)` | Every published assignment, earliest due date first. Pass a course name or code (`CIS 7000`) to limit it to one class. |
 | `due_this_week()` | Assignments due this Monday–Sunday week. The first line names the week and the timezone. |
 | `academic_week()` | This week, next week, and where the load is heavy: two or more due the same day, or two or more from the same course. |
+
+The four Canvas tools refuse a guest. Coursework is not a shared shelf ([ADR-0008](docs/adr/0008-coursework-is-not-a-commons.md)). A bad or expired token is an error, not a guest.
 
 `assignments()` includes how you turn the work in and a short plain-text description. The week tools stay shorter: course, name, due date, points, turn-in status, and the Canvas link. A line looks like this:
 
@@ -41,6 +44,16 @@ CANVAS_BASE_URL=https://canvas.upenn.edu
 
 Leave `CANVAS_BASE_URL` as is for Penn. Change it if the courses live on another Canvas.
 
+4. On the Neon project, open **Auth** and enable it (Managed Better Auth). Copy the one auth URL into `.env`, plus this server's own address and the email that may see the courses:
+
+```bash
+NEON_AUTH_BASE_URL=https://….neonauth….neon.tech/neondb/auth
+PUBLIC_URL=http://127.0.0.1:8000
+OWNER_EMAIL=you@upenn.edu
+```
+
+`PUBLIC_URL` on Render is `https://<your-service>.onrender.com`. Set `OWNER_EMAIL` to the account you sign in with. Without it, every signed-in user can see this Canvas. A legacy Stack Auth project uses `NEON_AUTH_JWKS_URL` and `STACK_PUB_CLIENT_KEY` instead of `NEON_AUTH_BASE_URL`.
+
 ## Run it locally
 
 From this folder:
@@ -57,9 +70,7 @@ Connect it to the `claude` CLI:
 claude mcp add --transport http assignment-mcp http://localhost:8000/mcp
 ```
 
-Then ask Claude "what's due this week?" or "what do I still have to turn in for CIS 7000?"
-
-The week boundary and the assignment line can be checked without a Canvas token:
+The week boundary, the assignment line, and the guest / bad-token gate can be checked without a Canvas token:
 
 ```bash
 uv run python -m unittest test_server.py
@@ -75,22 +86,26 @@ claude.ai calls from Anthropic's cloud, so it cannot reach `localhost`. Use a tu
 cloudflared tunnel --url http://localhost:8000
 ```
 
-In claude.ai, open Settings → Connectors and add the printed `https://….trycloudflare.com/mcp` URL.
+In claude.ai, open Settings → Connectors and add the printed `https://….trycloudflare.com/mcp` URL. claude.ai may say "No sign-in — Detected". Override that to **Sign in now**, and set the OAuth client to **Register automatically (DCR)**. The server's login page opens. Sign in, or sign up. Then ask "what's my user status?" — it should name your email — and "what's due this week?"
+
+A guest who skips sign-in gets a refusal, not the courses. The first login page can take about a minute while a free-tier server wakes up. Finish sign-in within 5 minutes; the code expires after that.
 
 **Render.** This stays up:
 
 1. [render.com](https://render.com) → Sign in with GitHub → **New +** → **Blueprint** → select this repo → **Apply**. [`render.yaml`](render.yaml) creates the `assignment-mcp` service and sets `TZ=America/New_York`.
-2. Open that service → **Environment** → add `CANVAS_API_TOKEN` with the token from Setup. Render does not read it from git. If the Blueprint already exists, add the variable there and save. Render redeploys the service.
-3. Point the claude.ai connector at `https://<your-service>.onrender.com/mcp`.
+2. Open that service → **Environment** and set `CANVAS_API_TOKEN`, `NEON_AUTH_BASE_URL`, `PUBLIC_URL`, and `OWNER_EMAIL`. Render does not read those from git. `PUBLIC_URL` is the service's own `https://….onrender.com` address — paste it once the service exists, then redeploy. If the Blueprint already exists, add the variables there and save.
+3. Point the claude.ai connector at `https://<your-service>.onrender.com/mcp`, with the same **Sign in now** and **Register automatically (DCR)** overrides as the tunnel.
 
 On the free plan the instance sleeps when idle. The first call after a nap takes about 30 seconds.
 
 ## Project layout
 
-- [`server.py`](server.py) — the four Canvas tools.
+- [`server.py`](server.py) — the Canvas tools, and who is allowed to call them.
+- [`auth.py`](auth.py) — the login page and OAuth endpoints Claude uses to sign in.
+- [`.claude/skills/my-ways/SKILL.md`](.claude/skills/my-ways/SKILL.md) — when to use this server, and when to leave it alone.
 - [`.env.example`](.env.example) — the variable names, with no token in them.
-- [`test_server.py`](test_server.py) — Monday week boundary, and what a formatted assignment contains.
-- [`docs/adr/`](docs/adr/) — why these choices: the assignments API ([ADR-0005](docs/adr/0005-canvas-rest-api-and-academic-week.md)), what a line includes ([ADR-0006](docs/adr/0006-show-the-assignment-not-just-the-deadline.md)), and Eastern time on Render ([ADR-0007](docs/adr/0007-render-runs-on-eastern-time.md)).
+- [`test_server.py`](test_server.py) — Monday week boundary, the assignment line, and the guest / bad-token gate.
+- [`docs/adr/`](docs/adr/) — why these choices: the assignments API ([ADR-0005](docs/adr/0005-canvas-rest-api-and-academic-week.md)), what a line includes ([ADR-0006](docs/adr/0006-show-the-assignment-not-just-the-deadline.md)), Eastern time on Render ([ADR-0007](docs/adr/0007-render-runs-on-eastern-time.md)), and why guests see no coursework ([ADR-0008](docs/adr/0008-coursework-is-not-a-commons.md)).
 - [`render.yaml`](render.yaml) — the Render service.
 
 ## License
