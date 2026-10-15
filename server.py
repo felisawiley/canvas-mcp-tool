@@ -3,7 +3,11 @@
 Ask your Claude "what's due this week?" without this connected: it can't
 know, because Canvas isn't in its context window. This server hands it a
 read-only view of Canvas — courses, assignments, due dates — through the
-same REST API Canvas's own web UI calls. See docs/adr/ for the reasoning.
+same REST API Canvas's own web UI calls.
+
+It also knows who is asking (ADR-0008). A guest gets no coursework. A
+valid Neon Auth user gets this Canvas. A bad token is an error, never a
+guest. See docs/adr/ for the reasoning.
 """
 import html as html_lib
 import os
@@ -14,7 +18,7 @@ from typing import Any
 
 import httpx
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 
 load_dotenv()
 
@@ -26,6 +30,13 @@ mcp = FastMCP(
 
 CANVAS_BASE_URL = os.environ.get("CANVAS_BASE_URL", "https://canvas.upenn.edu").rstrip("/")
 CANVAS_API_TOKEN = os.environ.get("CANVAS_API_TOKEN", "")
+NEON_AUTH_BASE_URL = os.environ.get("NEON_AUTH_BASE_URL", "").rstrip("/")
+JWKS_URL = os.environ.get("NEON_AUTH_JWKS_URL") or (
+    NEON_AUTH_BASE_URL + "/.well-known/jwks.json" if NEON_AUTH_BASE_URL else None
+)
+_stack_project = re.search(r"/projects/([0-9a-fA-F-]+)/", os.environ.get("NEON_AUTH_JWKS_URL", ""))
+STACK_PROJECT_ID = os.environ.get("STACK_PROJECT_ID") or (_stack_project.group(1) if _stack_project else "")
+GUEST_TOKEN = "guest-no-shelf"
 
 SUBMISSION_LABELS = {
     "online_upload": "file upload",
@@ -40,6 +51,57 @@ SUBMISSION_LABELS = {
     "wiki_page": "wiki page",
     "none": "no submission",
 }
+
+
+def current_identity(ctx: Context):
+    """(user_id, email), or (None, None) for a guest.
+
+    Absent token → guest. The declared guest credential → guest.
+    Invalid token → raise. A bad credential must never look like a guest
+    (your-protected-notes ADR-0001 D4). Identity is the JWT `sub`.
+    """
+    request = getattr(ctx.request_context, "request", None)
+    auth_header = request.headers.get("authorization", "") if request is not None else ""
+    if not auth_header.lower().startswith("bearer "):
+        return None, None
+    token = auth_header.split(None, 1)[1]
+    if token == GUEST_TOKEN:
+        return None, None
+    import jwt as pyjwt
+    from jwt import PyJWKClient
+    if not JWKS_URL:
+        raise RuntimeError(
+            "No auth variables set — NEON_AUTH_BASE_URL (Managed Better Auth) "
+            "or NEON_AUTH_JWKS_URL (legacy Stack)."
+        )
+    signing_key = PyJWKClient(JWKS_URL).get_signing_key_from_jwt(token)
+    claims = pyjwt.decode(
+        token,
+        signing_key.key,
+        algorithms=["EdDSA", "ES256", "RS256"],
+        audience=STACK_PROJECT_ID or None,
+        options={"verify_aud": bool(STACK_PROJECT_ID)},
+    )
+    return claims["sub"], claims.get("email")
+
+
+def _canvas_access(user_id, email) -> str | None:
+    """None when this caller may read Canvas. Otherwise the refusal."""
+    if user_id is None:
+        return (
+            "You're a guest. This coursework isn't a shared commons — "
+            "sign in to see it."
+        )
+    owner = os.environ.get("OWNER_EMAIL", "").strip().lower()
+    if owner and (email or "").strip().lower() != owner:
+        who = email or user_id
+        return f"Signed in as {who}. This Canvas belongs to {owner}."
+    return None
+
+
+def _refuse_canvas(ctx: Context) -> str | None:
+    user_id, email = current_identity(ctx)
+    return _canvas_access(user_id, email)
 
 
 def _client() -> httpx.Client:
@@ -245,8 +307,30 @@ def _format_assignment(a: dict, *, detailed: bool = False) -> str:
 
 
 @mcp.tool()
-def canvas() -> str:
+def user_status(ctx: Context) -> str:
+    """Who does this server think you are? Always available, in every mode."""
+    user_id, email = current_identity(ctx)
+    if user_id is None:
+        return "guest — coursework stays hidden. Sign in to see your Canvas."
+    owner = os.environ.get("OWNER_EMAIL", "").strip()
+    who = email or user_id
+    if owner and who.strip().lower() != owner.lower():
+        return f"user — signed in as {who}. This Canvas belongs to {owner}."
+    if owner:
+        return f"user — signed in as {who}. This Canvas is yours."
+    return (
+        f"user — signed in as {who}. OWNER_EMAIL is not set, so every "
+        "signed-in user can see this Canvas."
+    )
+
+
+@mcp.tool()
+def canvas(ctx: Context) -> str:
     """Active courses, their instructors, modules, and latest announcements."""
+    refusal = _refuse_canvas(ctx)
+    if refusal:
+        return refusal
+
     def fetch() -> str:
         with _client() as client:
             courses = _active_courses(client)
@@ -292,11 +376,15 @@ def canvas() -> str:
 
 
 @mcp.tool()
-def assignments(course: str | None = None) -> str:
+def assignments(ctx: Context, course: str | None = None) -> str:
     """Published assignments, with how to submit, whether it's turned in, and a short description.
 
     Pass a course name or code to limit the list to one class.
     """
+    refusal = _refuse_canvas(ctx)
+    if refusal:
+        return refusal
+
     def fetch() -> str:
         with _client() as client:
             items = _all_assignments(client, course)
@@ -308,8 +396,12 @@ def assignments(course: str | None = None) -> str:
 
 
 @mcp.tool()
-def due_this_week() -> str:
+def due_this_week(ctx: Context) -> str:
     """Assignments due in the current Monday–Sunday academic week, earliest first."""
+    refusal = _refuse_canvas(ctx)
+    if refusal:
+        return refusal
+
     def fetch() -> str:
         now = datetime.now(timezone.utc)
         start, end = _week_bounds(now)
@@ -328,8 +420,12 @@ def due_this_week() -> str:
 
 
 @mcp.tool()
-def academic_week() -> str:
+def academic_week(ctx: Context) -> str:
     """What's due this week, which classes it comes from, what's next, and where the week is heavy."""
+    refusal = _refuse_canvas(ctx)
+    if refusal:
+        return refusal
+
     def fetch() -> str:
         now = datetime.now(timezone.utc)
         start, end = _week_bounds(now)
@@ -376,6 +472,10 @@ def academic_week() -> str:
 
     return _call(fetch)
 
+
+from auth import register_oauth_routes
+
+register_oauth_routes(mcp)
 
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")

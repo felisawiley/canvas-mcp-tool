@@ -65,5 +65,57 @@ class FormatTest(unittest.TestCase):
         self.assertLessEqual(len(text), 40)
 
 
+class _Req:
+    def __init__(self, headers):
+        self.headers = headers
+
+
+class _RC:
+    def __init__(self, request):
+        self.request = request
+
+
+class Ctx:
+    def __init__(self, authorization=None, request=...):
+        if request is ...:
+            headers = {}
+            if authorization is not None:
+                headers["authorization"] = authorization
+            request = _Req(headers)
+        self.request_context = _RC(request)
+
+
+class IdentityTest(unittest.TestCase):
+    def tearDown(self):
+        os.environ.pop("OWNER_EMAIL", None)
+        server.JWKS_URL = None
+
+    def test_absent_token_is_guest(self):
+        self.assertEqual(server.current_identity(Ctx(request=None)), (None, None))
+
+    def test_declared_guest_credential_is_guest(self):
+        ctx = Ctx(authorization="Bearer guest-no-shelf")
+        self.assertEqual(server.current_identity(ctx), (None, None))
+        refusal = server._canvas_access(None, None)
+        self.assertIn("guest", refusal.lower())
+
+    def test_garbled_token_is_not_a_guest(self):
+        server.JWKS_URL = "https://example.invalid/jwks.json"
+        with self.assertRaises(Exception):
+            server.current_identity(Ctx(authorization="Bearer not-a-jwt"))
+
+    def test_owner_pin_refuses_someone_else(self):
+        os.environ["OWNER_EMAIL"] = "me@upenn.edu"
+        self.assertIsNone(server._canvas_access("sub", "Me@upenn.edu"))
+        refusal = server._canvas_access("sub", "other@upenn.edu")
+        self.assertIn("other@upenn.edu", refusal)
+        self.assertIn("me@upenn.edu", refusal)
+        self.assertNotIn("guest", refusal.lower())
+
+    def test_without_owner_pin_any_signed_in_user_is_allowed(self):
+        os.environ.pop("OWNER_EMAIL", None)
+        self.assertIsNone(server._canvas_access("sub", "anyone@upenn.edu"))
+
+
 if __name__ == "__main__":
     unittest.main()
