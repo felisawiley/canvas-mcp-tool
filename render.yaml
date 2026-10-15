@@ -3,40 +3,18 @@
 # after a nap takes ~30s. Fine for an instrument; know it's there.
 services:
   - type: web
-    name: your-first-instrument
-    runtime: python
-    plan: free
-    rootDir: twilight_mcp
-    buildCommand: pip install "mcp[cli]>=1.2,<2" "psycopg[binary]>=3.1"  # PINNED — mcp 2.x renamed FastMCP (caught in class 2026-09-10, and again on Render 2026-09-17: this buildCommand bypasses pyproject.toml, so the pin must live in BOTH places)
-    startCommand: python server.py
-    envVars:
-      - key: DATABASE_URL
-        sync: false   # Same Neon string as your-first-memory. The quote list
-                      # is the shelf table now. Set it in the dashboard.
-  - type: web
     name: assignment-mcp
     runtime: python
     plan: free
-    rootDir: assignment_mcp   # git submodule — github.com/felisawiley/penn-assignments-mcp
-    buildCommand: pip install "mcp[cli]>=1.2,<2"  # PINNED — see the note on your-first-instrument above
+    # PINNED — mcp 2.x renamed FastMCP. buildCommand bypasses pyproject.toml,
+    # so the pin must live in BOTH places. httpx and python-dotenv are direct
+    # imports; they are not optional just because mcp happens to pull httpx.
+    buildCommand: pip install "mcp[cli]>=1.2,<2" "httpx>=0.27" "python-dotenv>=1.0"
     startCommand: python server.py
     envVars:
       - key: CANVAS_API_TOKEN
         sync: false   # set in Render's dashboard, never committed
       - key: CANVAS_BASE_URL
         value: https://canvas.upenn.edu
-  - type: web
-    name: your-first-memory
-    runtime: python
-    plan: free
-    rootDir: memory_mcp
-    # PINNED — mcp 2.x renamed FastMCP. buildCommand bypasses pyproject.toml,
-    # so the pin must live in BOTH places. psycopg[binary] ships its own libpq.
-    buildCommand: pip install "mcp[cli]>=1.2,<2" "psycopg[binary]>=3.1"
-    startCommand: python server.py
-    envVars:
-      - key: DATABASE_URL
-        sync: false   # Secret. Render prompts only on the Blueprint's first
-                      # create. This Blueprint already exists, so set
-                      # DATABASE_URL on the your-first-memory service in the
-                      # dashboard (memory ADR-0003). It never touches git.
+      - key: TZ
+        value: America/New_York   # academic week is Eastern, not the host's UTC (ADR-0007)

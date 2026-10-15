@@ -1,70 +1,98 @@
-# my-new-instrument
+# assignment-mcp
 
-An MCP server that gives a Claude model senses it doesn't have on its own: a clock, and a source of Twilight quotes. Built from the [CIS 7000](https://www.cis.upenn.edu/) "your-first-instrument" starter (Computationally Assisted Metacognition, Penn, Fall 2026).
+Read-only Canvas tools for a Claude model: your active courses, your published assignments, and the current academic week.
+
+The week runs Monday 00:00 through Sunday in the server's local timezone. On Render that timezone is `America/New_York`. Locally it is whatever timezone the machine is using.
 
 ## Tools
 
-| Tool | What it does |
+| Tool | What it returns |
 |---|---|
-| `current_time()` | Returns the current UTC and local time. |
-| `seconds_since(iso_timestamp)` | Returns elapsed time since a given ISO timestamp. |
-| `twilight_quote()` | Returns a random line from the shelf in Neon. The starter list is [`twilight_catalog.json`](memory_mcp/twilight_catalog.json). |
+| `canvas()` | Active courses, instructors, up to ten modules each, and the two latest announcements. |
+| `assignments(course?)` | Every published assignment, earliest due date first. Pass a course name or code (`CIS 7000`) to limit it to one class. |
+| `due_this_week()` | Assignments due this Monday–Sunday week. The first line names the week and the timezone. |
+| `academic_week()` | This week, next week, and where the load is heavy: two or more due the same day, or two or more from the same course. |
+
+`assignments()` includes how you turn the work in and a short plain-text description. The week tools stay shorter: course, name, due date, points, turn-in status, and the Canvas link. A line looks like this:
+
+```text
+- [CIS 7000] Reading response — due Sun Oct 18, 11:59 PM (10 pts) · text entry · submitted
+  https://canvas.upenn.edu/courses/1/assignments/2
+  Write 300 words.
+```
+
+Status is shown when it changes what you would do next (`submitted`, `graded`, `pending review`, `missing`, `late`). An assignment you have not turned in yet has no status word.
+
+## Setup
+
+1. In Canvas, open Account → Settings → **New access token**. Copy the token. It is a password for your courses: it goes in `.env` only, never in git or chat.
+2. From this folder:
+
+```bash
+cp .env.example .env
+```
+
+3. Put the token in `.env`:
+
+```bash
+CANVAS_API_TOKEN=paste-your-token
+CANVAS_BASE_URL=https://canvas.upenn.edu
+```
+
+Leave `CANVAS_BASE_URL` as is for Penn. Change it if the courses live on another Canvas.
 
 ## Run it locally
 
+From this folder:
+
 ```bash
-cd twilight_mcp
-uv run server.py     # starts the server on port 8000
+uv run server.py
 ```
+
+The server listens on port 8000, or on `PORT` if that variable is set.
 
 Connect it to the `claude` CLI:
 
 ```bash
-claude mcp add --transport http first-instrument http://localhost:8000/mcp
+claude mcp add --transport http assignment-mcp http://localhost:8000/mcp
 ```
 
-Then ask Claude something like "What time is it?" or "Give me a Twilight quote."
+Then ask Claude "what's due this week?" or "what do I still have to turn in for CIS 7000?"
 
-## Connect to claude.ai (browser)
+The week boundary and the assignment line can be checked without a Canvas token:
 
-claude.ai calls from Anthropic's cloud, so it can't reach `localhost` directly — you need a tunnel or a deployment.
+```bash
+uv run python -m unittest test_server.py
+```
 
-**Tunnel (temporary, dies with your terminal):**
+## Connect to claude.ai
+
+claude.ai calls from Anthropic's cloud, so it cannot reach `localhost`. Use a tunnel or Render.
+
+**Tunnel.** This lasts until you close the terminal:
 
 ```bash
 cloudflared tunnel --url http://localhost:8000
 ```
 
-Add the printed `https://….trycloudflare.com/mcp` URL under claude.ai → Settings → Connectors.
+In claude.ai, open Settings → Connectors and add the printed `https://….trycloudflare.com/mcp` URL.
 
-**Deploy to Render (permanent, free tier):**
+**Render.** This stays up:
 
-1. [render.com](https://render.com) → Sign in with GitHub → **New +** → **Blueprint** → select this repo → **Apply**. (`render.yaml` handles the rest.)
-2. Copy the resulting `https://….onrender.com` URL.
-3. claude.ai → Settings → Connectors → edit `first-instrument` → set the URL to `https://….onrender.com/mcp`.
+1. [render.com](https://render.com) → Sign in with GitHub → **New +** → **Blueprint** → select this repo → **Apply**. [`render.yaml`](render.yaml) creates the `assignment-mcp` service and sets `TZ=America/New_York`.
+2. Open that service → **Environment** → add `CANVAS_API_TOKEN` with the token from Setup. Render does not read it from git. If the Blueprint already exists, add the variable there and save. Render redeploys the service.
+3. Point the claude.ai connector at `https://<your-service>.onrender.com/mcp`.
 
-Free tier note: the instance naps when idle, so the first call after a nap takes ~30s.
-
-## A memory that outlives the chat
-
-[`memory_mcp/`](memory_mcp/) is a Twilight shelf: `shelve_quote`, `browse_shelf`, and `take_back`. A card keeps the quote, who said it, the book, the chapter, the page, and the date published. The five main books fill that date in when you leave it blank. Taken-back cards stay on the shelf, crossed out ([ADR-0006](memory_mcp/docs/adr/0006-a-shelf-card-is-a-citation.md)). Setup is [memory_mcp/COURSE-STEPS.md](memory_mcp/COURSE-STEPS.md).
-
-```bash
-cd memory_mcp
-uv run server.py     # needs DATABASE_URL; see COURSE-STEPS.md step 2
-```
-
-Render does not ask for `DATABASE_URL` on an existing Blueprint. After `your-first-memory` exists, open that service → Environment → add `DATABASE_URL` and paste the Neon connection string. It is not stored in this repo.
+On the free plan the instance sleeps when idle. The first call after a nap takes about 30 seconds.
 
 ## Project layout
 
-- [`twilight_mcp/server.py`](twilight_mcp/server.py) — the clock and Twilight-quote tools.
-- [`memory_mcp/twilight_catalog.json`](memory_mcp/twilight_catalog.json) — the starter quotes. A connection loads them onto the shelf.
-- [`memory_mcp/server.py`](memory_mcp/server.py) — the Twilight shelf (a quote plus where to find it). `twilight_quote()` reads this table.
-- [`docs/adr/`](docs/adr) — the reasoning behind the Twilight instrument's setup.
-- [`memory_mcp/docs/adr/`](memory_mcp/docs/adr/) — the reasoning behind the memory server.
-- [`render.yaml`](render.yaml) — Render deployment config.
+- [`server.py`](server.py) — the four Canvas tools.
+- [`.env.example`](.env.example) — the variable names, with no token in them.
+- [`test_server.py`](test_server.py) — Monday week boundary, and what a formatted assignment contains.
+- [`docs/adr/`](docs/adr/) — why these choices: the assignments API ([ADR-0005](docs/adr/0005-canvas-rest-api-and-academic-week.md)), what a line includes ([ADR-0006](docs/adr/0006-show-the-assignment-not-just-the-deadline.md)), and Eastern time on Render ([ADR-0007](docs/adr/0007-render-runs-on-eastern-time.md)).
+- [`render.yaml`](render.yaml) — the Render service.
 
 ## License
 
-MPL-2.0, with an additional grant covering work built from this template — see [LICENSE.txt](LICENSE.txt) and [TEMPLATE-GRANT.md](TEMPLATE-GRANT.md).
+MPL-2.0, plus the grant for work built from the course template. See [LICENSE.txt](LICENSE.txt), [TEMPLATE-GRANT.md](TEMPLATE-GRANT.md), and [NOTICE.txt](NOTICE.txt).
