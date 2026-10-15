@@ -1,33 +1,62 @@
-# my-new-instrument
+# assignment-mcp
 
-An MCP server that gives a Claude model senses it doesn't have on its own: a clock, and a source of Twilight quotes. Built from the [CIS 7000](https://www.cis.upenn.edu/) "your-first-instrument" starter (Computationally Assisted Metacognition, Penn, Fall 2026).
+An MCP server that gives a Claude model a sense of coursework it doesn't
+have on its own: what's assigned, what's due, and when the week is heavy —
+pulled live from Canvas.
+
+Built from the [CIS 7000](https://www.cis.upenn.edu/) "your-first-instrument"
+starter (Computationally Assisted Metacognition, Penn, Fall 2026). The
+reasoning for the stack is in [`docs/adr/`](docs/adr/). The Canvas choices
+are [ADR-0005](docs/adr/0005-canvas-rest-api-and-academic-week.md),
+[ADR-0006](docs/adr/0006-show-the-assignment-not-just-the-deadline.md), and
+[ADR-0007](docs/adr/0007-render-runs-on-eastern-time.md).
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
-| `current_time()` | Returns the current UTC and local time. |
-| `seconds_since(iso_timestamp)` | Returns elapsed time since a given ISO timestamp. |
-| `twilight_quote()` | Returns a random line from the shelf in Neon. The starter list is [`twilight_catalog.json`](memory_mcp/twilight_catalog.json). |
+| `canvas()` | Active courses, their instructors, modules, and latest announcements. |
+| `assignments(course?)` | Published assignments, optionally one course by name or code. Each line has the due date, points, how you submit, whether it's turned in, the Canvas link, and a short description. |
+| `due_this_week()` | Assignments due in the current Monday–Sunday week, earliest first. The heading names the week. |
+| `academic_week()` | What's due this week, which classes it comes from, what's coming next week, and which days or courses are unusually loaded. |
+
+## Setup
+
+1. Canvas → Account → Settings → **New access token**. Copy it.
+2. Put it in a `.env` file in this folder (that file stays uncommitted):
+
+```bash
+CANVAS_API_TOKEN=paste-your-token
+CANVAS_BASE_URL=https://canvas.upenn.edu
+```
+
+`CANVAS_BASE_URL` can be omitted when you are on Penn's Canvas.
 
 ## Run it locally
 
 ```bash
-cd twilight_mcp
 uv run server.py     # starts the server on port 8000
 ```
 
 Connect it to the `claude` CLI:
 
 ```bash
-claude mcp add --transport http first-instrument http://localhost:8000/mcp
+claude mcp add --transport http assignment-mcp http://localhost:8000/mcp
 ```
 
-Then ask Claude something like "What time is it?" or "Give me a Twilight quote."
+Then ask Claude something like "what's due this week?" or "give me a
+synthesis of my academic week."
+
+Check the week boundary and the way a card is formatted without a token:
+
+```bash
+uv run python -m unittest test_server.py
+```
 
 ## Connect to claude.ai (browser)
 
-claude.ai calls from Anthropic's cloud, so it can't reach `localhost` directly — you need a tunnel or a deployment.
+claude.ai calls from Anthropic's cloud, so it can't reach `localhost`
+directly — you need a tunnel or a deployment.
 
 **Tunnel (temporary, dies with your terminal):**
 
@@ -35,34 +64,28 @@ claude.ai calls from Anthropic's cloud, so it can't reach `localhost` directly �
 cloudflared tunnel --url http://localhost:8000
 ```
 
-Add the printed `https://….trycloudflare.com/mcp` URL under claude.ai → Settings → Connectors.
+Add the printed `https://….trycloudflare.com/mcp` URL under claude.ai →
+Settings → Connectors.
 
 **Deploy to Render (permanent, free tier):**
 
-1. [render.com](https://render.com) → Sign in with GitHub → **New +** → **Blueprint** → select this repo → **Apply**. (`render.yaml` handles the rest.)
-2. Copy the resulting `https://….onrender.com` URL.
-3. claude.ai → Settings → Connectors → edit `first-instrument` → set the URL to `https://….onrender.com/mcp`.
+1. [render.com](https://render.com) → Sign in with GitHub → **New +** →
+   **Blueprint** → select this repo → **Apply**. (`render.yaml` handles the
+   rest, including `TZ=America/New_York` so "this week" is a Penn week.)
+2. Set `CANVAS_API_TOKEN` on the `assignment-mcp` service. Render does not
+   store that value in git. If the service already exists, open it →
+   **Environment** → add the variable.
+3. Copy the resulting `https://….onrender.com` URL and point a claude.ai
+   connector at `https://….onrender.com/mcp`.
 
-Free tier note: the instance naps when idle, so the first call after a nap takes ~30s.
-
-## A memory that outlives the chat
-
-[`memory_mcp/`](memory_mcp/) is a Twilight shelf: `shelve_quote`, `browse_shelf`, and `take_back`. A card keeps the quote, who said it, the book, the chapter, the page, and the date published. The five main books fill that date in when you leave it blank. Taken-back cards stay on the shelf, crossed out ([ADR-0006](memory_mcp/docs/adr/0006-a-shelf-card-is-a-citation.md)). Setup is [memory_mcp/COURSE-STEPS.md](memory_mcp/COURSE-STEPS.md).
-
-```bash
-cd memory_mcp
-uv run server.py     # needs DATABASE_URL; see COURSE-STEPS.md step 2
-```
-
-Render does not ask for `DATABASE_URL` on an existing Blueprint. After `your-first-memory` exists, open that service → Environment → add `DATABASE_URL` and paste the Neon connection string. It is not stored in this repo.
+Free tier note: the instance naps when idle, so the first call after a nap
+takes ~30s.
 
 ## Project layout
 
-- [`twilight_mcp/server.py`](twilight_mcp/server.py) — the clock and Twilight-quote tools.
-- [`memory_mcp/twilight_catalog.json`](memory_mcp/twilight_catalog.json) — the starter quotes. A connection loads them onto the shelf.
-- [`memory_mcp/server.py`](memory_mcp/server.py) — the Twilight shelf (a quote plus where to find it). `twilight_quote()` reads this table.
-- [`docs/adr/`](docs/adr) — the reasoning behind the Twilight instrument's setup.
-- [`memory_mcp/docs/adr/`](memory_mcp/docs/adr/) — the reasoning behind the memory server.
+- [`server.py`](server.py) — the four Canvas tools.
+- [`test_server.py`](test_server.py) — the Monday week boundary, and what a formatted assignment contains.
+- [`docs/adr/`](docs/adr/) — why this stack, why the assignments API, why Eastern time on Render.
 - [`render.yaml`](render.yaml) — Render deployment config.
 
 ## License
