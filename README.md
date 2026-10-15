@@ -4,6 +4,20 @@ Read-only Canvas tools for a Claude model: your active courses, your published a
 
 The week runs Monday 00:00 through Sunday in the server's local timezone. On Render that timezone is `America/New_York`. Locally it is whatever timezone the machine is using.
 
+## Names
+
+The server is `assignment-mcp`. The GitHub repo is still `my-new-instrument`. Neon and Render do not use that GitHub name.
+
+| Place | What it is called | What a rename does |
+|---|---|---|
+| GitHub repo | `my-new-instrument` | Rename this to `assignment-mcp`. GitHub redirects the old address. |
+| Render service | `assignment-mcp` | Leave the service name. It is the `onrender.com` host Claude calls. |
+| Neon project | whatever you named the database | Leave the connection string and the Auth URL. Renaming the project label does not change either one. |
+
+Rename the repo: GitHub → `felisawiley/my-new-instrument` → **Settings** → **General** → **Repository name** → `assignment-mcp` → **Rename**. Then open the Render Blueprint once and confirm it still shows this repository. GitHub's redirect usually keeps that link. You do not reconnect Neon.
+
+Do not rename the Render service. That creates a new host. If the host ever changes, paste it into the service's `PUBLIC_URL` and into the claude.ai connector as `https://<host>/mcp`. Do not reset the Neon password or generate a new connection string. This server does not use that string, and a new one would break any service that still does.
+
 ## Tools
 
 | Tool | What it returns |
